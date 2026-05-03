@@ -85,3 +85,88 @@ class VisualizationModule:
         plt.close()
         return path
 
+    def model_metric_comparison(self, baseline_ml: pd.DataFrame, masked_ml: pd.DataFrame) -> Path:
+        path = self.output_dir / "model_metric_comparison.png"
+        metrics = ["accuracy", "precision", "recall", "f1", "roc_auc"]
+        baseline = baseline_ml.assign(dataset="Original")
+        masked = masked_ml.assign(dataset="Best Masked")
+        plot_df = pd.concat([baseline, masked], ignore_index=True)
+        plot_df = plot_df.melt(
+            id_vars=["dataset", "model"],
+            value_vars=[metric for metric in metrics if metric in plot_df],
+            var_name="metric",
+            value_name="score",
+        )
+        plt.figure(figsize=(11, 6))
+        sns.barplot(data=plot_df, x="metric", y="score", hue="dataset")
+        plt.ylim(0, 1)
+        plt.title("Model Utility Metrics")
+        plt.tight_layout()
+        plt.savefig(path, dpi=160)
+        plt.close()
+        return path
+
+    def information_loss(self, results: pd.DataFrame) -> Path:
+        path = self.output_dir / "information_loss_by_method.png"
+        plot_df = results.copy()
+        plt.figure(figsize=(9, 5))
+        sns.boxplot(data=plot_df, x="method", y="information_loss")
+        sns.stripplot(data=plot_df, x="method", y="information_loss", color="black", alpha=0.35, size=3)
+        plt.ylim(0, 1)
+        plt.title("Information Loss by Transformation")
+        plt.tight_layout()
+        plt.savefig(path, dpi=160)
+        plt.close()
+        return path
+
+    def transformation_impact(self, validation: pd.DataFrame) -> Path:
+        path = self.output_dir / "transformation_impact.png"
+        metrics = ["ks_statistic", "kl_divergence", "variance_preservation"]
+        plot_df = validation.melt(
+            id_vars=["feature"],
+            value_vars=[metric for metric in metrics if metric in validation],
+            var_name="metric",
+            value_name="value",
+        )
+        plt.figure(figsize=(10, 5))
+        sns.barplot(data=plot_df, x="feature", y="value", hue="metric")
+        plt.title("Statistical Transformation Impact")
+        plt.xticks(rotation=25, ha="right")
+        plt.tight_layout()
+        plt.savefig(path, dpi=160)
+        plt.close()
+        return path
+
+    def generalization_diagnostics(self, baseline_ml: pd.DataFrame, masked_ml: pd.DataFrame) -> Path:
+        path = self.output_dir / "generalization_diagnostics.png"
+        baseline = baseline_ml.assign(dataset="Original")
+        masked = masked_ml.assign(dataset="Best Masked")
+        plot_df = pd.concat([baseline, masked], ignore_index=True)
+        plot_df = plot_df.melt(
+            id_vars=["dataset", "model"],
+            value_vars=["train_accuracy", "validation_accuracy", "accuracy", "cv_accuracy_mean"],
+            var_name="metric",
+            value_name="score",
+        )
+        plt.figure(figsize=(11, 6))
+        sns.lineplot(data=plot_df, x="metric", y="score", hue="model", style="dataset", marker="o")
+        plt.ylim(0, 1)
+        plt.title("Train, Validation, Test, and CV Accuracy")
+        plt.tight_layout()
+        plt.savefig(path, dpi=160)
+        plt.close()
+        return path
+
+    def roc_auc_comparison(self, baseline_ml: pd.DataFrame, masked_ml: pd.DataFrame) -> Path:
+        path = self.output_dir / "roc_auc_comparison.png"
+        baseline = baseline_ml.assign(dataset="Original")
+        masked = masked_ml.assign(dataset="Best Masked")
+        plot_df = pd.concat([baseline, masked], ignore_index=True)
+        plt.figure(figsize=(8, 5))
+        sns.barplot(data=plot_df, x="model", y="roc_auc", hue="dataset")
+        plt.ylim(0, 1)
+        plt.title("ROC-AUC Comparison")
+        plt.tight_layout()
+        plt.savefig(path, dpi=160)
+        plt.close()
+        return path

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,12 +15,15 @@ class MaskingConfig:
     epsilon: float = 1.0
     gender_mask_probability: float = 0.0
     hybrid_dp_budget_fraction: float = 0.7
+    swap_fraction: float = 0.0
+    perturbation_strength: float = 0.0
 
     def label(self) -> str:
         return (
             f"{self.method}|noise={self.noise_std}|bin={self.generalization_bin}|"
             f"eps={self.epsilon}|gender_p={self.gender_mask_probability}|"
-            f"dp_fraction={self.hybrid_dp_budget_fraction}"
+            f"dp_fraction={self.hybrid_dp_budget_fraction}|swap={self.swap_fraction}|"
+            f"perturb={self.perturbation_strength}"
         )
 
 
@@ -40,8 +44,14 @@ class MaskingEngine:
             return self.generalization(masked, config.generalization_bin, config.gender_mask_probability, rng)
         if config.method == "differential_privacy":
             return self.differential_privacy(masked, config.epsilon, rng)
+        if config.method == "data_swapping":
+            return self.data_swapping(masked, config.swap_fraction, rng)
+        if config.method == "feature_perturbation":
+            return self.feature_perturbation(masked, config.perturbation_strength, rng)
         if config.method == "hybrid":
             masked = self.noise_addition(masked, config.noise_std, 0.0, rng)
+            masked = self.data_swapping(masked, config.swap_fraction, rng)
+            masked = self.feature_perturbation(masked, config.perturbation_strength, rng)
             gender_before_generalization = masked["Gender"].copy() if "Gender" in masked else None
             masked = self.generalization(masked, config.generalization_bin, 0.0, rng)
             if gender_before_generalization is not None:
@@ -69,6 +79,56 @@ class MaskingEngine:
             df["Income"] = (pd.to_numeric(df["Income"], errors="coerce") + income_noise).clip(0, 1)
         if "Gender" in self.sensitive_attributes and "Gender" in df and gender_mask_probability > 0:
             df["Gender"] = self._mask_categorical(df["Gender"], gender_mask_probability, rng, replacement="Suppressed")
+        return df
+
+    def data_swapping(
+        self,
+        df: pd.DataFrame,
+        swap_fraction: float,
+        rng: np.random.Generator,
+    ) -> pd.DataFrame:
+        swap_fraction = float(np.clip(swap_fraction, 0, 1))
+        if swap_fraction <= 0 or len(df) < 2:
+            return df
+
+        n_swap = int(round(len(df) * swap_fraction))
+        if n_swap < 2:
+            return df
+
+        indices = rng.choice(df.index.to_numpy(), size=n_swap, replace=False)
+        shuffled = indices.copy()
+        rng.shuffle(shuffled)
+        columns = [column for column in ["Age", "Gender"] if column in self.sensitive_attributes and column in df]
+        for column in columns:
+            df.loc[indices, column] = df.loc[shuffled, column].to_numpy()
+        return df
+
+    def feature_perturbation(
+        self,
+        df: pd.DataFrame,
+        perturbation_strength: float,
+        rng: np.random.Generator,
+    ) -> pd.DataFrame:
+        perturbation_strength = float(np.clip(perturbation_strength, 0, 1))
+        if perturbation_strength <= 0:
+            return df
+
+        if "Age" in self.sensitive_attributes and "Age" in df:
+            age = self._numeric_age(df["Age"])
+            scale = max(age.std(), 1.0) * perturbation_strength
+            df["Age"] = (age + rng.normal(0, scale, len(df))).clip(18, 90)
+        if "Income" in self.sensitive_attributes and "Income" in df:
+            income = self._numeric_income(df["Income"])
+            flip = rng.random(len(df)) < min(perturbation_strength / 2, 0.35)
+            df["Income"] = income.copy()
+            df.loc[flip, "Income"] = 1 - (income.loc[flip] >= 0.5).astype(float)
+        if "Gender" in self.sensitive_attributes and "Gender" in df:
+            df["Gender"] = self._mask_categorical(
+                df["Gender"],
+                probability=min(perturbation_strength, 0.65),
+                rng=rng,
+                replacement="Perturbed",
+            )
         return df
 
     def generalization(
@@ -182,4 +242,5 @@ class MaskingEngine:
             return float("nan")
 
     def _seed_for(self, config: MaskingConfig) -> int:
-        return abs(hash((self.random_state, config.label()))) % (2**32)
+        digest = hashlib.sha256(f"{self.random_state}:{config.label()}".encode("utf-8")).hexdigest()
+        return int(digest[:16], 16) % (2**32)
